@@ -1,4 +1,4 @@
-"""Main LangGraph implementation for the Deep Research agent."""
+"""深度研究代理的主要LangGraph实现。"""
 
 import asyncio
 from typing import Literal
@@ -54,29 +54,29 @@ from open_deep_research.utils import (
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
+    configurable_fields=("model","base_url","max_tokens", "api_key"),
 )
 
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
-    """Analyze user messages and ask clarifying questions if the research scope is unclear.
-    
-    This function determines whether the user's request needs clarification before proceeding
-    with research. If clarification is disabled or not needed, it proceeds directly to research.
-    
+    """分析用户消息，如果研究范围不清晰则询问澄清问题。
+
+    此函数确定用户的请求在进行研究之前是否需要澄清。
+    如果澄清功能被禁用或不需要，则直接进入研究阶段。
+
     Args:
-        state: Current agent state containing user messages
-        config: Runtime configuration with model settings and preferences
-        
+        state: 包含用户消息的当前代理状态
+        config: 运行时配置，包含模型设置和偏好
+
     Returns:
-        Command to either end with a clarifying question or proceed to research brief
+        命令：要么以澄清问题结束，要么继续研究简报
     """
-    # Step 1: Check if clarification is enabled in configuration
+    # 步骤1：检查配置中是否启用了澄清功能
     configurable = Configuration.from_runnable_config(config)
     if not configurable.allow_clarification:
-        # Skip clarification step and proceed directly to research
+        # 跳过澄清步骤，直接进入研究
         return Command(goto="write_research_brief")
-    
-    # Step 2: Prepare the model for structured clarification analysis
+
+    # 步骤2：为结构化澄清分析准备模型
     messages = state["messages"]
     model_config = {
         "model": configurable.research_model,
@@ -84,52 +84,52 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         "api_key": get_api_key_for_model(configurable.research_model, config),
         "tags": ["langsmith:nostream"]
     }
-    
-    # Configure model with structured output and retry logic
+
+    # 配置模型，包含结构化输出和重试逻辑
     clarification_model = (
         configurable_model
         .with_structured_output(ClarifyWithUser)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(model_config)
     )
-    
-    # Step 3: Analyze whether clarification is needed
+
+    # 步骤3：分析是否需要澄清
     prompt_content = clarify_with_user_instructions.format(
-        messages=get_buffer_string(messages), 
+        messages=get_buffer_string(messages),
         date=get_today_str()
     )
     response = await clarification_model.ainvoke([HumanMessage(content=prompt_content)])
-    
-    # Step 4: Route based on clarification analysis
+
+    # 步骤4：根据澄清分析进行路由
     if response.need_clarification:
-        # End with clarifying question for user
+        # 以澄清问题结束，返回给用户
         return Command(
-            goto=END, 
+            goto=END,
             update={"messages": [AIMessage(content=response.question)]}
         )
     else:
-        # Proceed to research with verification message
+        # 继续研究，附带验证消息
         return Command(
-            goto="write_research_brief", 
+            goto="write_research_brief",
             update={"messages": [AIMessage(content=response.verification)]}
         )
 
 
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
-    """Transform user messages into a structured research brief and initialize supervisor.
-    
-    This function analyzes the user's messages and generates a focused research brief
-    that will guide the research supervisor. It also sets up the initial supervisor
-    context with appropriate prompts and instructions.
-    
+    """将用户消息转换为结构化研究简报并初始化监督者。
+
+    此函数分析用户消息并生成一个聚焦的研究简报，
+    该简报将指导研究监督者。它还使用适当的提示和指令
+    设置初始监督者上下文。
+
     Args:
-        state: Current agent state containing user messages
-        config: Runtime configuration with model settings
-        
+        state: 包含用户消息的当前代理状态
+        config: 运行时配置，包含模型设置
+
     Returns:
-        Command to proceed to research supervisor with initialized context
+        命令：继续到研究监督者，附带初始化的上下文
     """
-    # Step 1: Set up the research model for structured output
+    # 步骤1：为结构化输出设置研究模型
     configurable = Configuration.from_runnable_config(config)
     research_model_config = {
         "model": configurable.research_model,
@@ -137,23 +137,23 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         "api_key": get_api_key_for_model(configurable.research_model, config),
         "tags": ["langsmith:nostream"]
     }
-    
-    # Configure model for structured research question generation
+
+    # 配置模型以生成结构化研究问题
     research_model = (
         configurable_model
         .with_structured_output(ResearchQuestion)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
     )
-    
-    # Step 2: Generate structured research brief from user messages
+
+    # 步骤2：从用户消息生成结构化研究简报
     prompt_content = transform_messages_into_research_topic_prompt.format(
         messages=get_buffer_string(state.get("messages", [])),
         date=get_today_str()
     )
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
-    
-    # Step 3: Initialize supervisor with research brief and instructions
+
+    # 步骤3：使用研究简报和指令初始化监督者
     supervisor_system_prompt = lead_researcher_prompt.format(
         date=get_today_str(),
         max_concurrent_research_units=configurable.max_concurrent_research_units,
@@ -176,20 +176,20 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
 
 
 async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor_tools"]]:
-    """Lead research supervisor that plans research strategy and delegates to researchers.
-    
-    The supervisor analyzes the research brief and decides how to break down the research
-    into manageable tasks. It can use think_tool for strategic planning, ConductResearch
-    to delegate tasks to sub-researchers, or ResearchComplete when satisfied with findings.
-    
+    """领导研究监督者，规划研究策略并委派给研究人员。
+
+    监督者分析研究简报，决定如何将研究分解为可管理的任务。
+    它可以使用think_tool进行战略规划，使用ConductResearch将任务委派给子研究人员，
+    或者在满意研究结果时使用ResearchComplete。
+
     Args:
-        state: Current supervisor state with messages and research context
-        config: Runtime configuration with model settings
-        
+        state: 当前监督者状态，包含消息和研究上下文
+        config: 运行时配置，包含模型设置
+
     Returns:
-        Command to proceed to supervisor_tools for tool execution
+        命令：继续到supervisor_tools执行工具
     """
-    # Step 1: Configure the supervisor model with available tools
+    # 步骤1：使用可用工具配置监督者模型
     configurable = Configuration.from_runnable_config(config)
     research_model_config = {
         "model": configurable.research_model,
@@ -197,23 +197,23 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         "api_key": get_api_key_for_model(configurable.research_model, config),
         "tags": ["langsmith:nostream"]
     }
-    
-    # Available tools: research delegation, completion signaling, and strategic thinking
+
+    # 可用工具：研究委派、完成信号和战略思考
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
-    
-    # Configure model with tools, retry logic, and model settings
+
+    # 配置模型，包含工具、重试逻辑和模型设置
     research_model = (
         configurable_model
         .bind_tools(lead_researcher_tools)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
     )
-    
-    # Step 2: Generate supervisor response based on current context
+
+    # 步骤2：基于当前上下文生成监督者响应
     supervisor_messages = state.get("supervisor_messages", [])
     response = await research_model.ainvoke(supervisor_messages)
-    
-    # Step 3: Update state and proceed to tool execution
+
+    # 步骤3：更新状态并继续执行工具
     return Command(
         goto="supervisor_tools",
         update={
@@ -223,35 +223,35 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
     )
 
 async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor", "__end__"]]:
-    """Execute tools called by the supervisor, including research delegation and strategic thinking.
-    
-    This function handles three types of supervisor tool calls:
-    1. think_tool - Strategic reflection that continues the conversation
-    2. ConductResearch - Delegates research tasks to sub-researchers
-    3. ResearchComplete - Signals completion of research phase
-    
+    """执行监督者调用的工具，包括研究委派和战略思考。
+
+    此函数处理三种类型的监督者工具调用：
+    1. think_tool - 战略反思，继续对话
+    2. ConductResearch - 将研究任务委派给子研究人员
+    3. ResearchComplete - 表示研究阶段完成
+
     Args:
-        state: Current supervisor state with messages and iteration count
-        config: Runtime configuration with research limits and model settings
-        
+        state: 当前监督者状态，包含消息和迭代计数
+        config: 运行时配置，包含研究限制和模型设置
+
     Returns:
-        Command to either continue supervision loop or end research phase
+        命令：要么继续监督循环，要么结束研究阶段
     """
-    # Step 1: Extract current state and check exit conditions
+    # 步骤1：提取当前状态并检查退出条件
     configurable = Configuration.from_runnable_config(config)
     supervisor_messages = state.get("supervisor_messages", [])
     research_iterations = state.get("research_iterations", 0)
     most_recent_message = supervisor_messages[-1]
-    
-    # Define exit criteria for research phase
+
+    # 定义研究阶段的退出标准
     exceeded_allowed_iterations = research_iterations > configurable.max_researcher_iterations
     no_tool_calls = not most_recent_message.tool_calls
     research_complete_tool_call = any(
-        tool_call["name"] == "ResearchComplete" 
+        tool_call["name"] == "ResearchComplete"
         for tool_call in most_recent_message.tool_calls
     )
-    
-    # Exit if any termination condition is met
+
+    # 如果满足任何终止条件，则退出
     if exceeded_allowed_iterations or no_tool_calls or research_complete_tool_call:
         return Command(
             goto=END,
@@ -260,28 +260,28 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                 "research_brief": state.get("research_brief", "")
             }
         )
-    
-    # Step 2: Process all tool calls together (both think_tool and ConductResearch)
+
+    # 步骤2：一起处理所有工具调用（包括think_tool和ConductResearch）
     all_tool_messages = []
     update_payload = {"supervisor_messages": []}
-    
-    # Handle think_tool calls (strategic reflection)
+
+    # 处理think_tool调用（战略反思）
     think_tool_calls = [
-        tool_call for tool_call in most_recent_message.tool_calls 
+        tool_call for tool_call in most_recent_message.tool_calls
         if tool_call["name"] == "think_tool"
     ]
-    
+
     for tool_call in think_tool_calls:
         reflection_content = tool_call["args"]["reflection"]
         all_tool_messages.append(ToolMessage(
-            content=f"Reflection recorded: {reflection_content}",
+            content=f"反思已记录: {reflection_content}",
             name="think_tool",
             tool_call_id=tool_call["id"]
         ))
-    
-    # Handle ConductResearch calls (research delegation)
+
+    # 处理ConductResearch调用（研究委派）
     conduct_research_calls = [
-        tool_call for tool_call in most_recent_message.tool_calls 
+        tool_call for tool_call in most_recent_message.tool_calls
         if tool_call["name"] == "ConductResearch"
     ]
     
