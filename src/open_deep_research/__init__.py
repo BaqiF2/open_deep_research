@@ -1,3 +1,29 @@
-"""Open Deep Research - A powerful research agent powered by LangGraph."""
+"""Open Deep Research - Planning, research, and report generation."""
 
-__version__ = "0.1.0"
+from open_deep_research.configuration import Configuration
+from open_deep_research.state import (
+    AgentInputState,
+    AgentState,
+    ClarifyWithUser,
+    ConductResearch,
+    ResearchComplete,
+    ResearcherOutputState,
+    ResearcherState,
+    ResearchQuestion,
+    SupervisorState,
+)
+
+__version__ = "0.0.16"
+
+__all__ = [
+    "Configuration",
+    "AgentInputState",
+    "AgentState",
+    "ClarifyWithUser",
+    "ConductResearch",
+    "ResearchComplete",
+    "ResearcherOutputState",
+    "ResearcherState",
+    "ResearchQuestion",
+    "SupervisorState",
+]

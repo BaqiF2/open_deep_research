@@ -21,17 +21,14 @@ class MCPConfig(BaseModel):
 
     url: Optional[str] = Field(
         default=None,
-        optional=True,
     )
     """MCP 服务器的 URL"""
     tools: Optional[List[str]] = Field(
         default=None,
-        optional=True,
     )
     """提供给 LLM 的工具列表"""
     auth_required: Optional[bool] = Field(
         default=False,
-        optional=True,
     )
     """MCP 服务器是否需要认证"""
 
@@ -41,7 +38,7 @@ class Configuration(BaseModel):
     # 通用配置
     max_structured_output_retries: int = Field(
         default=3,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 3,
@@ -53,7 +50,7 @@ class Configuration(BaseModel):
     )
     allow_clarification: bool = Field(
         default=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
@@ -63,7 +60,7 @@ class Configuration(BaseModel):
     )
     max_concurrent_research_units: int = Field(
         default=5,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 5,
@@ -77,7 +74,7 @@ class Configuration(BaseModel):
     # 研究配置
     search_api: SearchAPI = Field(
         default=SearchAPI.TAVILY,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "select",
                 "default": "tavily",
@@ -93,7 +90,7 @@ class Configuration(BaseModel):
     )
     max_researcher_iterations: int = Field(
         default=6,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 6,
@@ -106,7 +103,7 @@ class Configuration(BaseModel):
     )
     max_react_tool_calls: int = Field(
         default=10,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 10,
@@ -120,7 +117,7 @@ class Configuration(BaseModel):
     # 模型配置
     summarization_model: str = Field(
         default="openai:gpt-4.1-mini",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "openai:gpt-4.1-mini",
@@ -130,7 +127,7 @@ class Configuration(BaseModel):
     )
     summarization_model_max_tokens: int = Field(
         default=8192,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 8192,
@@ -140,7 +137,7 @@ class Configuration(BaseModel):
     )
     max_content_length: int = Field(
         default=50000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 50000,
@@ -152,7 +149,7 @@ class Configuration(BaseModel):
     )
     research_model: str = Field(
         default="openai:gpt-4.1",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "openai:gpt-4.1",
@@ -162,7 +159,7 @@ class Configuration(BaseModel):
     )
     research_model_max_tokens: int = Field(
         default=10000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 10000,
@@ -172,7 +169,7 @@ class Configuration(BaseModel):
     )
     compression_model: str = Field(
         default="openai:gpt-4.1",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "openai:gpt-4.1",
@@ -182,7 +179,7 @@ class Configuration(BaseModel):
     )
     compression_model_max_tokens: int = Field(
         default=8192,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 8192,
@@ -192,7 +189,7 @@ class Configuration(BaseModel):
     )
     final_report_model: str = Field(
         default="openai:gpt-4.1",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "openai:gpt-4.1",
@@ -202,7 +199,7 @@ class Configuration(BaseModel):
     )
     final_report_model_max_tokens: int = Field(
         default=10000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 10000,
@@ -213,8 +210,7 @@ class Configuration(BaseModel):
     # MCP 服务器配置
     mcp_config: Optional[MCPConfig] = Field(
         default=None,
-        optional=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "mcp",
                 "description": "MCP 服务器配置"
@@ -223,8 +219,7 @@ class Configuration(BaseModel):
     )
     mcp_prompt: Optional[str] = Field(
         default=None,
-        optional=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "description": "传递给代理的关于可用 MCP 工具的任何额外指令。"
