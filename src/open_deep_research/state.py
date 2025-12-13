@@ -18,14 +18,17 @@ class ConductResearch(BaseModel):
         description="要研究的主题。应该是单个主题，并且应该详细描述（至少一段）。",
     )
 
+
 class ResearchComplete(BaseModel):
     """调用此工具表示研究完成。"""
+
 
 class Summary(BaseModel):
     """研究摘要及关键发现。"""
 
     summary: str
     key_excerpts: str
+
 
 class ClarifyWithUser(BaseModel):
     """用户澄清请求的模型。"""
@@ -40,6 +43,8 @@ class ClarifyWithUser(BaseModel):
         description="验证消息，表示在用户提供必要信息后将开始研究。",
     )
 
+
+# FIXME 参数描述补充
 class ResearchQuestion(BaseModel):
     """用于指导研究的研究问题和简要说明。"""
 
@@ -59,38 +64,68 @@ def override_reducer(current_value, new_value):
     else:
         return operator.add(current_value, new_value)
 
+
 class AgentInputState(MessagesState):
     """InputState仅包含'messages'。"""
 
+
 class AgentState(MessagesState):
-    """包含消息和研究数据的主要智能体状态。"""
+    """
+    包含消息和研究数据的主要智能体状态。
+    supervisor_messages: 存储与研究相关的消息。
+    research_brief: 存储当前研究主题。
+    raw_notes: 存储原始笔记。
+    notes: 存储笔记。
+    final_report: 存储最终报告。
+    """
 
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
-    raw_notes: Annotated[list[str], override_reducer] = []
-    notes: Annotated[list[str], override_reducer] = []
+    raw_notes: Annotated[list[str], override_reducer]
+    notes: Annotated[list[str], override_reducer]
     final_report: str
 
+
 class SupervisorState(TypedDict):
-    """管理研究任务的监督者状态。"""
+    """
+    管理研究任务的监督者状态。
+    supervisor_messages: 存储与研究相关的消息。
+    research_brief: 存储当前研究主题。
+    raw_notes: 存储原始笔记。
+    notes: 存储笔记。
+    research_iterations: 存储研究迭代次数。
+    """
 
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: str
-    notes: Annotated[list[str], override_reducer] = []
-    research_iterations: int = 0
-    raw_notes: Annotated[list[str], override_reducer] = []
+    notes: Annotated[list[str], override_reducer]
+    research_iterations: int
+    raw_notes: Annotated[list[str], override_reducer]
+
 
 class ResearcherState(TypedDict):
-    """进行研究的个别研究者状态。"""
+    """
+    研究者状态
+    researcher_messages: 存储与研究相关的消息。
+    tool_call_iterations: 工具调用次数
+    research_topic： 研究主题
+    compressed_research： 压缩研究结果
+    raw_notes: 存储原始笔记。
+    """
 
     researcher_messages: Annotated[list[MessageLikeRepresentation], operator.add]
-    tool_call_iterations: int = 0
+    tool_call_iterations: int
     research_topic: str
     compressed_research: str
-    raw_notes: Annotated[list[str], override_reducer] = []
+    raw_notes: Annotated[list[str], override_reducer]
+
 
 class ResearcherOutputState(BaseModel):
-    """来自个别研究者的输出状态。"""
+    """
+    研究者的输出状态。
+    compressed_research: 存储压缩后的研究结果。
+    raw_notes: 存储原始笔记。
+    """
 
     compressed_research: str
     raw_notes: Annotated[list[str], override_reducer] = []

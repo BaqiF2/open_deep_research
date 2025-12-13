@@ -1,6 +1,6 @@
 """System prompts and prompt templates for the Deep Research agent."""
 
-clarify_with_user_instructions="""
+clarify_with_user_instructions = """
 These are the messages that have been exchanged so far from the user asking for the report:
 <Messages>
 {messages}
@@ -40,8 +40,7 @@ For the verification message when no clarification is needed:
 - Keep the message concise and professional
 """
 
-
-transform_messages_into_research_topic_prompt = """You will be given a set of messages that have been exchanged so far between yourself and the user. 
+transform_messages_into_research_topic_prompt = """You will be given a set of messages that have been exchanged so far between yourself and the user.
 Your job is to translate these messages into a more detailed and concrete research question that will be used to guide the research.
 
 The messages that have been exchanged so far between yourself and the user are:
@@ -51,7 +50,8 @@ The messages that have been exchanged so far between yourself and the user are:
 
 Today's date is {date}.
 
-You will return a single research question that will be used to guide the research.
+You will return your response in JSON format with the following structure:
+{{"research_brief": "<your detailed research question here>"}}
 
 Guidelines:
 1. Maximize Specificity and Detail
@@ -182,7 +182,6 @@ After each search tool call, use think_tool to analyze the results:
 </Show Your Thinking>
 """
 
-
 compress_research_system_prompt = """You are a research assistant that has conducted research on a topic by calling several tools and web searches. Your job is now to clean up the findings, but preserve all of the relevant statements and information that the researcher has gathered. For context, today's date is {date}.
 
 <Task>
@@ -306,7 +305,6 @@ Format the report in clear markdown with proper structure and include source ref
 - Citations are extremely important. Make sure to include these, and pay a lot of attention to getting these right. Users will often use these citations to look into more information.
 </Citation Rules>
 """
-
 
 summarize_webpage_prompt = """You are tasked with summarizing the raw content of a webpage retrieved from a web search. Your goal is to create a summary that preserves the most important information from the original web page. This summary will be used by a downstream research agent, so it's crucial to maintain the key details without losing essential information.
 

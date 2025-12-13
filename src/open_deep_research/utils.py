@@ -25,6 +25,7 @@ from langchain_core.tools import (
     tool,
 )
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
 from langgraph.config import get_store
 from mcp import McpError
 from tavily import AsyncTavilyClient
@@ -40,12 +41,14 @@ TAVILY_SEARCH_DESCRIPTION = (
     "专为全面、准确和可信结果优化的搜索引擎。"
     "适用于需要回答当前事件相关问题的情况。"
 )
+
+
 @tool(description=TAVILY_SEARCH_DESCRIPTION)
 async def tavily_search(
-    queries: List[str],
-    max_results: Annotated[int, InjectedToolArg] = 5,
-    topic: Annotated[Literal["general", "news", "finance"], InjectedToolArg] = "general",
-    config: RunnableConfig = None
+        queries: List[str],
+        max_results: Annotated[int, InjectedToolArg] = 5,
+        topic: Annotated[Literal["general", "news", "finance"], InjectedToolArg] = "general",
+        config: RunnableConfig = None
 ) -> str:
     """从 Tavily 搜索 API 获取并总结搜索结果。
 
@@ -80,13 +83,15 @@ async def tavily_search(
 
     # 字符限制以保持在模型令牌限制内（可配置）
     max_char_to_include = configurable.max_content_length
-    
+
     # 使用重试逻辑初始化总结模型
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    summarization_model = init_chat_model(
+    base_url = get_base_url_for_model(configurable.summarization_model)
+    summarization_model = ChatOpenAI(
         model=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
         api_key=model_api_key,
+        base_url=base_url,
         tags=["langsmith:nostream"]
     ).with_structured_output(Summary).with_retry(
         stop_after_attempt=configurable.max_structured_output_retries
@@ -96,20 +101,34 @@ async def tavily_search(
     async def noop():
         """对于没有原始内容的结果的空操作函数。"""
         return None
-    
+
     summarization_tasks = [
-        noop() if not result.get("raw_content") 
+        noop() if not result.get("raw_content")
         else summarize_webpage(
-            summarization_model, 
+            summarization_model,
             result['raw_content'][:max_char_to_include]
         )
         for result in unique_results.values()
     ]
-    
+
     # 步骤 5: 并行执行所有总结任务
     summaries = await asyncio.gather(*summarization_tasks)
 
     # 步骤 6: 将结果与其总结结合
+    # 这段代码创建了一个字典推导式，将处理后的搜索结果组织成结构化格式
+    # 
+    # 数据结构说明：
+    # - 外层键(url): 搜索结果的网页URL，确保每个URL只出现一次
+    # - 内层字典包含两个字段：
+    #   * 'title': 网页标题，直接从搜索结果中获取
+    #   * 'content': 网页内容或总结
+    #     - 如果 summary 为 None（表示总结失败或无原始内容），使用原始的 content
+    #     - 否则使用 AI 生成的 summary（包含摘要和关键摘录）
+    # 
+    # zip() 函数说明：
+    # - 将三个可迭代对象（URLs、结果字典、总结列表）并行迭代
+    # - 确保 URL、对应的结果和对应的总结一一对应
+    # - 例如：第1个URL对应第1个result和第1个summary
     summarized_results = {
         url: {
             'title': result['title'],
@@ -125,22 +144,24 @@ async def tavily_search(
     # 步骤 7: 格式化最终输出
     if not summarized_results:
         return "未找到有效的搜索结果。请尝试不同的搜索查询或使用其他搜索API。"
-    
+
     formatted_output = "Search results: \n\n"
     for i, (url, result) in enumerate(summarized_results.items()):
-        formatted_output += f"\n\n--- SOURCE {i+1}: {result['title']} ---\n"
+        formatted_output += f"\n\n--- SOURCE {i + 1}: {result['title']} ---\n"
         formatted_output += f"URL: {url}\n\n"
         formatted_output += f"SUMMARY:\n{result['content']}\n\n"
         formatted_output += "\n\n" + "-" * 80 + "\n"
-    
+
     return formatted_output
 
+
+# TODO 原子方法，制作搜索。考虑是否区分原子方法
 async def tavily_search_async(
-    search_queries,
-    max_results: int = 5,
-    topic: Literal["general", "news", "finance"] = "general",
-    include_raw_content: bool = True,
-    config: RunnableConfig = None
+        search_queries,
+        max_results: int = 5,
+        topic: Literal["general", "news", "finance"] = "general",
+        include_raw_content: bool = True,
+        config: RunnableConfig = None
 ):
     """异步执行多个 Tavily 搜索查询。
 
@@ -172,6 +193,7 @@ async def tavily_search_async(
     search_results = await asyncio.gather(*search_tasks)
     return search_results
 
+
 async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
     """使用 AI 模型总结网页内容，并提供超时保护。
 
@@ -189,7 +211,20 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
             date=get_today_str()
         )
 
-        # 执行总结并设置超时以防止挂起
+        # asyncio.wait_for 是 Python 异步编程中用于设置超时的工具函数
+        # 它接收两个主要参数：
+        # 1. 一个协程对象（这里是 model.ainvoke 调用）
+        # 2. timeout 超时时间（单位：秒）
+        # 
+        # 工作原理：
+        # - 如果协程在指定时间内完成，返回协程的结果
+        # - 如果超过指定时间还未完成，抛出 asyncio.TimeoutError 异常
+        # - 这样可以防止某个异步操作无限期地等待，避免程序卡死
+        #
+        # 在这个场景中：
+        # - model.ainvoke() 是调用 AI 模型进行网页内容总结的异步操作
+        # - 设置 60 秒超时，如果 AI 模型 60 秒内没有返回结果，就会触发超时
+        # - 超时后会被下面的 except asyncio.TimeoutError 捕获并返回原始内容
         summary = await asyncio.wait_for(
             model.ainvoke([HumanMessage(content=prompt_content)]),
             timeout=60.0  # 总结的超时时间为 60 秒
@@ -212,10 +247,11 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
         logging.warning(f"总结失败，错误: {str(e)}，返回原始内容")
         return webpage_content
 
+
 ##########################
 # 反思工具工具函数
 ##########################
-
+## FIXME 因为要调用工具 将提示词直接笑到工具的 docstring中，这使得模型需要去推理反思内容。类似todo-list的方式，很好的一个思路和参考
 @tool(description="用于研究规划的战略反思工具")
 def think_tool(reflection: str) -> str:
     """用于研究进度和决策的战略反思工具。
@@ -243,13 +279,14 @@ def think_tool(reflection: str) -> str:
     """
     return f"反思已记录：{reflection}"
 
+
 ##########################
 # MCP 工具函数
 ##########################
-
+# TODO MCP 访问方式有待商榷
 async def get_mcp_access_token(
-    supabase_token: str,
-    base_mcp_url: str,
+        supabase_token: str,
+        base_mcp_url: str,
 ) -> Optional[Dict[str, Any]]:
     """使用 OAuth 令牌交换将 Supabase 令牌交换为 MCP 访问令牌。
 
@@ -290,6 +327,7 @@ async def get_mcp_access_token(
 
     return None
 
+
 async def get_tokens(config: RunnableConfig):
     """检索存储的身份验证令牌并验证过期时间。
 
@@ -328,6 +366,7 @@ async def get_tokens(config: RunnableConfig):
 
     return tokens.value
 
+
 async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]):
     """在配置存储中存储身份验证令牌。
 
@@ -348,6 +387,7 @@ async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]):
 
     # 存储令牌
     await store.aput((user_id, "tokens"), "data", tokens)
+
 
 async def fetch_tokens(config: RunnableConfig) -> dict[str, Any]:
     """获取并刷新 MCP 令牌，必要时获取新的令牌。
@@ -381,6 +421,7 @@ async def fetch_tokens(config: RunnableConfig) -> dict[str, Any]:
     # 存储新令牌并返回它们
     await set_tokens(config, mcp_tokens)
     return mcp_tokens
+
 
 def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     """使用全面的身份验证和错误处理包装 MCP 工具。
@@ -446,9 +487,10 @@ def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     tool.coroutine = authentication_wrapper
     return tool
 
+
 async def load_mcp_tools(
-    config: RunnableConfig,
-    existing_tool_names: set[str],
+        config: RunnableConfig,
+        existing_tool_names: set[str],
 ) -> list[BaseTool]:
     """加载并配置具有身份验证的 MCP（模型上下文协议）工具。
 
@@ -469,10 +511,10 @@ async def load_mcp_tools(
 
     # 步骤 2: 验证配置要求
     config_valid = (
-        configurable.mcp_config and
-        configurable.mcp_config.url and
-        configurable.mcp_config.tools and
-        (mcp_tokens or not configurable.mcp_config.auth_required)
+            configurable.mcp_config and
+            configurable.mcp_config.url and
+            configurable.mcp_config.tools and
+            (mcp_tokens or not configurable.mcp_config.auth_required)
     )
 
     if not config_valid:
@@ -527,7 +569,7 @@ async def load_mcp_tools(
 ##########################
 # 工具工具函数
 ##########################
-
+# TODO 考虑区分
 async def get_search_tool(search_api: SearchAPI):
     """基于指定的 API 提供程序配置并返回搜索工具。
 
@@ -565,7 +607,8 @@ async def get_search_tool(search_api: SearchAPI):
 
     # 未知搜索 API 类型的默认回退
     return []
-    
+
+
 async def get_all_tools(config: RunnableConfig):
     """组装包含研究、搜索和 MCP 工具的完整工具包。
 
@@ -596,9 +639,11 @@ async def get_all_tools(config: RunnableConfig):
 
     return tools
 
+
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
-    """从工具调用消息中提取注释。"""
+    """提取工具消息内容"""
     return [tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")]
+
 
 ##########################
 # 模型提供程序原生网络搜索工具函数
@@ -635,6 +680,7 @@ def anthropic_websearch_called(response):
     except (AttributeError, TypeError):
         # 处理响应结构意外的情况
         return False
+
 
 def openai_websearch_called(response):
     """检测响应中是否使用了 OpenAI 的网络搜索功能。
@@ -695,10 +741,11 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
 
     # 步骤 3: 如果提供程序未知，检查所有提供程序
     return (
-        _check_openai_token_limit(exception, error_str) or
-        _check_anthropic_token_limit(exception, error_str) or
-        _check_gemini_token_limit(exception, error_str)
+            _check_openai_token_limit(exception, error_str) or
+            _check_anthropic_token_limit(exception, error_str) or
+            _check_gemini_token_limit(exception, error_str)
     )
+
 
 def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
     """检查异常是否表示 OpenAI 令牌限制被超出。"""
@@ -709,8 +756,8 @@ def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
 
     # 检查这是否是 OpenAI 异常
     is_openai_exception = (
-        'openai' in exception_type.lower() or
-        'openai' in module_name.lower()
+            'openai' in exception_type.lower() or
+            'openai' in module_name.lower()
     )
 
     # 检查典型的 OpenAI 令牌限制错误类型
@@ -728,10 +775,11 @@ def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
         error_type = getattr(exception, 'type', '')
 
         if (error_code == 'context_length_exceeded' or
-            error_type == 'invalid_request_error'):
+                error_type == 'invalid_request_error'):
             return True
 
     return False
+
 
 def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
     """检查异常是否表示 Anthropic 令牌限制被超出。"""
@@ -742,8 +790,8 @@ def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
 
     # 检查这是否是 Anthropic 异常
     is_anthropic_exception = (
-        'anthropic' in exception_type.lower() or
-        'anthropic' in module_name.lower()
+            'anthropic' in exception_type.lower() or
+            'anthropic' in module_name.lower()
     )
 
     # 检查 Anthropic 特定的错误模式
@@ -756,6 +804,7 @@ def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
 
     return False
 
+
 def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
     """检查异常是否表示 Google/Gemini 令牌限制被超出。"""
     # 分析异常元数据
@@ -765,8 +814,8 @@ def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
 
     # 检查这是否是 Google/Gemini 异常
     is_google_exception = (
-        'google' in exception_type.lower() or
-        'google' in module_name.lower()
+            'google' in exception_type.lower() or
+            'google' in module_name.lower()
     )
 
     # 检查 Google 特定的资源耗尽错误
@@ -783,6 +832,7 @@ def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
         return True
 
     return False
+
 
 # 注意：这可能已过时或不适用于您的模型。请根据需要更新此内容。
 MODEL_TOKEN_LIMITS = {
@@ -828,6 +878,7 @@ MODEL_TOKEN_LIMITS = {
     "anthropic.claude-opus-4-1-20250805-v1:0": 200000,
 }
 
+
 def get_model_token_limit(model_string):
     """查找特定模型的令牌限制。
 
@@ -844,6 +895,7 @@ def get_model_token_limit(model_string):
 
     # 在查找表中未找到模型
     return None
+
 
 def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> list[MessageLikeRepresentation]:
     """通过删除到最后一个 AI 消息为止来截断消息历史。
@@ -865,10 +917,11 @@ def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> l
     # 未找到 AI 消息，返回原始列表
     return messages
 
+
 ##########################
 # 杂项工具函数
 ##########################
-
+# TODO 非模型调用工具可与模型调用工具区分
 def get_today_str() -> str:
     """获取当前日期并格式化以在提示和输出中显示。
 
@@ -877,6 +930,7 @@ def get_today_str() -> str:
     """
     now = datetime.now()
     return f"{now:%a} {now:%b} {now.day}, {now:%Y}"
+
 
 def get_config_value(value):
     """从配置中提取值，处理枚举和 None 值。"""
@@ -889,29 +943,40 @@ def get_config_value(value):
     else:
         return value.value
 
+
 def get_api_key_for_model(model_name: str, config: RunnableConfig):
     """从环境或配置中获取特定模型的 API 密钥。"""
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
     model_name = model_name.lower()
+    # 这个基本不使用
     if should_get_from_config.lower() == "true":
         api_keys = config.get("configurable", {}).get("apiKeys", {})
         if not api_keys:
             return None
-        if model_name.startswith("openai:"):
-            return api_keys.get("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
+        if model_name.startswith("anthropic:"):
             return api_keys.get("ANTHROPIC_API_KEY")
         elif model_name.startswith("google"):
             return api_keys.get("GOOGLE_API_KEY")
-        return None
-    else:
-        if model_name.startswith("openai:"):
+        else:
             return os.getenv("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
+    else:
+        if model_name.startswith("anthropic:"):
             return os.getenv("ANTHROPIC_API_KEY")
         elif model_name.startswith("google"):
             return os.getenv("GOOGLE_API_KEY")
+        # 默认使用 OpenAIKEY
+        else:
+            return os.getenv("OPENAI_API_KEY")
+
+
+def get_base_url_for_model(model_name: str):
+    """从环境或配置中获取特定模型的 URL。"""
+    model_name = model_name.lower()
+    if model_name.startswith("openai:") or model_name.startswith("anthropic:") or model_name.startswith("google"):
         return None
+    else:
+        return os.getenv("BASE_URL")
+
 
 def get_tavily_api_key(config: RunnableConfig):
     """从环境或配置中获取 Tavily API 密钥。"""

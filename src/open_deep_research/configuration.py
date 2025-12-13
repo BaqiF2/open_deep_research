@@ -16,6 +16,7 @@ class SearchAPI(Enum):
     TAVILY = "tavily"
     NONE = "none"
 
+
 class MCPConfig(BaseModel):
     """模型上下文协议 (MCP) 服务器的配置。"""
 
@@ -31,6 +32,7 @@ class MCPConfig(BaseModel):
         default=False,
     )
     """MCP 服务器是否需要认证"""
+
 
 class Configuration(BaseModel):
     """深度研究代理的主要配置类。"""
@@ -114,13 +116,13 @@ class Configuration(BaseModel):
             }
         }
     )
-    # 模型配置
+    # 总结模型配置 TODO: 替换为 Qwen系列
     summarization_model: str = Field(
-        default="openai:gpt-4.1-mini",
+        default="qwen3-max",
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1-mini",
+                "default": "qwen3-max",
                 "description": "用于总结 Tavily 搜索结果的研究结果的模型"
             }
         }
@@ -148,11 +150,11 @@ class Configuration(BaseModel):
         }
     )
     research_model: str = Field(
-        default="openai:gpt-4.1",
+        default="qwen3-max",
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+                "default": "qwen3-max",
                 "description": "用于进行研究的模型。注意：确保你的研究者模型支持所选的搜索 API。"
             }
         }
@@ -168,11 +170,11 @@ class Configuration(BaseModel):
         }
     )
     compression_model: str = Field(
-        default="openai:gpt-4.1",
+        default="qwen3-max",
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+                "default": "qwen3-max",
                 "description": "用于压缩子代理研究发现的模型。注意：确保你的压缩模型支持所选的搜索 API。"
             }
         }
@@ -188,11 +190,11 @@ class Configuration(BaseModel):
         }
     )
     final_report_model: str = Field(
-        default="openai:gpt-4.1",
+        default="qwen3-max",
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+                "default": "qwen3-max",
                 "description": "用于根据所有研究发现撰写最终报告的模型"
             }
         }
@@ -227,10 +229,9 @@ class Configuration(BaseModel):
         }
     )
 
-
     @classmethod
     def from_runnable_config(
-        cls, config: Optional[RunnableConfig] = None
+            cls, config: Optional[RunnableConfig] = None
     ) -> "Configuration":
         """从 RunnableConfig 创建 Configuration 实例。"""
         configurable = config.get("configurable", {}) if config else {}

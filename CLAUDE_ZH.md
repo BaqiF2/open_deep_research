@@ -21,7 +21,7 @@ Open Deep Research 是一个可配置的、完全开源的深度研究代理，�
 - `utils.py` - 工具函数和辅助函数
 - `files/` - 研究输出和示例文件
 
-### 遗留实现 (`src/legacy/`)
+### 遗留实现 (`src/legacy/`) 
 包含两个早期的研究实现：
 - `graph.py` - 计划-执行工作流，支持人工干预
 - `multi_agent.py` - 监督者-研究者多智能体架构
