@@ -12,14 +12,9 @@ class SearchAPI(Enum):
     """可用的搜索 API 提供者枚举。
 
     Attributes:
-        ANTHROPIC: Anthropic 搜索 API。
-        OPENAI: OpenAI 搜索 API。
         TAVILY: Tavily 搜索 API。
         NONE: 不使用搜索 API。
     """
-
-    ANTHROPIC = "anthropic"
-    OPENAI = "openai"
     TAVILY = "tavily"
     NONE = "none"
 
@@ -113,8 +108,6 @@ class Configuration(BaseModel):
                 "description": "用于研究的搜索 API。注意：确保你的研究者模型支持所选的搜索 API。",
                 "options": [
                     {"label": "Tavily", "value": SearchAPI.TAVILY.value},
-                    {"label": "OpenAI 原生网页搜索", "value": SearchAPI.OPENAI.value},
-                    {"label": "Anthropic 原生网页搜索", "value": SearchAPI.ANTHROPIC.value},
                     {"label": "无", "value": SearchAPI.NONE.value}
                 ]
             }
@@ -146,7 +139,7 @@ class Configuration(BaseModel):
             }
         }
     )
-    # 总结模型配置 TODO: 替换为 Qwen系列
+    # 总结模型配置
     summarization_model: str = Field(
         default="qwen3-max",
         json_schema_extra={

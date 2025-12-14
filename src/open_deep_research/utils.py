@@ -510,111 +510,19 @@ def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     tool.coroutine = authentication_wrapper
     return tool
 
-
-async def load_mcp_tools(
-        config: RunnableConfig,
-        existing_tool_names: set[str],
-) -> list[BaseTool]:
-    """加载并配置具有身份验证的 MCP（模型上下文协议）工具。
-
-    Args:
-        config: 包含 MCP 服务器详情的运行时配置
-        existing_tool_names: 已使用的工具名称集合，用于避免冲突
-
-    Returns:
-        准备使用的已配置 MCP 工具列表
-    """
-    configurable = Configuration.from_runnable_config(config)
-
-    # 步骤 1: 如果需要，处理身份验证
-    if configurable.mcp_config and configurable.mcp_config.auth_required:
-        mcp_tokens = await fetch_tokens(config)
-    else:
-        mcp_tokens = None
-
-    # 步骤 2: 验证配置要求
-    config_valid = (
-            configurable.mcp_config and
-            configurable.mcp_config.url and
-            configurable.mcp_config.tools and
-            (mcp_tokens or not configurable.mcp_config.auth_required)
-    )
-
-    if not config_valid:
-        return []
-
-    # 步骤 3: 设置 MCP 服务器连接
-    server_url = configurable.mcp_config.url.rstrip("/") + "/mcp"
-
-    # 如果令牌可用，配置身份验证标头
-    auth_headers = None
-    if mcp_tokens:
-        auth_headers = {"Authorization": f"Bearer {mcp_tokens['access_token']}"}
-
-    mcp_server_config = {
-        "server_1": {
-            "url": server_url,
-            "headers": auth_headers,
-            "transport": "streamable_http"
-        }
-    }
-    # TODO: 当多 MCP 服务器支持在 OAP 中合并时，更新此代码
-
-    # 步骤 4: 从 MCP 服务器加载工具
-    try:
-        client = MultiServerMCPClient(mcp_server_config)
-        available_mcp_tools = await client.get_tools()
-    except Exception:
-        # 如果 MCP 服务器连接失败，返回空列表
-        return []
-
-    # 步骤 5: 过滤和配置工具
-    configured_tools = []
-    for mcp_tool in available_mcp_tools:
-        # 跳过具有冲突名称的工具
-        if mcp_tool.name in existing_tool_names:
-            warnings.warn(
-                f"MCP 工具 '{mcp_tool.name}' 与现有工具名称冲突 - 跳过"
-            )
-            continue
-
-        # 只包含配置中指定的工具
-        if mcp_tool.name not in set(configurable.mcp_config.tools):
-            continue
-
-        # 使用身份验证处理包装工具并添加到列表
-        enhanced_tool = wrap_mcp_authenticate_tool(mcp_tool)
-        configured_tools.append(enhanced_tool)
-
-    return configured_tools
-
-
 ##########################
 # 工具工具函数
 ##########################
-# TODO 考虑区分
 async def get_search_tool(search_api: SearchAPI):
     """基于指定的 API 提供程序配置并返回搜索工具。
 
     Args:
-        search_api: 要使用的搜索 API 提供程序（Anthropic、OpenAI、Tavily 或 None）
+        search_api: 要使用的搜索 API 提供程序（Tavily 或 None）
 
     Returns:
         指定提供程序的已配置搜索工具对象列表
     """
-    if search_api == SearchAPI.ANTHROPIC:
-        # Anthropic 的原生网络搜索，带使用限制
-        return [{
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }]
-
-    elif search_api == SearchAPI.OPENAI:
-        # OpenAI 的网络搜索预览功能
-        return [{"type": "web_search_preview"}]
-
-    elif search_api == SearchAPI.TAVILY:
+    if search_api == SearchAPI.TAVILY:
         # 配置带有元数据的 Tavily 搜索工具
         search_tool = tavily_search
         search_tool.metadata = {
@@ -633,7 +541,7 @@ async def get_search_tool(search_api: SearchAPI):
 
 
 async def get_all_tools(config: RunnableConfig):
-    """组装包含研究、搜索和 MCP 工具的完整工具包。
+    """组装包含研究、思考、搜索。
 
     Args:
         config: 指定搜索 API 和 MCP 设置的运行时配置
@@ -642,23 +550,13 @@ async def get_all_tools(config: RunnableConfig):
         研究操作的所有已配置和可用工具列表
     """
     # 从核心研究工具开始
-    tools = [tool(ResearchComplete), think_tool]
+    tools = [ResearchComplete, think_tool]
 
     # 添加已配置的搜索工具
     configurable = Configuration.from_runnable_config(config)
     search_api = SearchAPI(get_config_value(configurable.search_api))
     search_tools = await get_search_tool(search_api)
     tools.extend(search_tools)
-
-    # 跟踪现有工具名称以防止冲突
-    existing_tool_names = {
-        tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
-        for tool in tools
-    }
-
-    # 如果已配置，添加 MCP 工具
-    mcp_tools = await load_mcp_tools(config, existing_tool_names)
-    tools.extend(mcp_tools)
 
     return tools
 

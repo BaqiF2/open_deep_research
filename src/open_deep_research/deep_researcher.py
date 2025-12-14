@@ -223,17 +223,16 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
     # bind_tools将这些工具"绑定"到模型上，AI可以调用它们
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
     # 配置模型，包含工具、重试逻辑和模型设置
-    research_model = ((
-                          ChatOpenAI(model=configurable.research_model,
+    research_model = (ChatOpenAI(model=configurable.research_model,
                                      max_tokens=configurable.research_model_max_tokens,
                                      api_key=get_api_key_for_model(configurable.research_model, config),
                                      base_url=get_base_url_for_model(configurable.research_model),
                                      tags=["langsmith:nostream"])
-                      ).bind_tools(lead_researcher_tools)
+                      .bind_tools(lead_researcher_tools)
                       .with_retry(stop_after_attempt=configurable.max_structured_output_retries))
 
     # 步骤2：基于当前上下文生成监督者响应
-    # 监督者会查看之前的对话和系统提示，决定下一步行动 FIXME 上一步由write_research_brief生成的内容
+    # 监督者会查看之前的对话和系统提示，决定下一步行动
     supervisor_messages = state.get("supervisor_messages", [])
     # 调用大模型得到下一步要执行的内容，继续新主题研究，思考，或者完成
     response = await research_model.ainvoke(supervisor_messages)
@@ -317,16 +316,21 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
         if tool_call["name"] == "think_tool"
     ]
 
-    # 如果有反思工具调用，将反思内容加入工具消息中
-    for tool_call in think_tool_calls:
-        reflection_content = tool_call["args"]["reflection"]
-        all_tool_messages.append(ToolMessage(
-            content=f"反思已记录: {reflection_content}",
-            name="think_tool",
-            tool_call_id=tool_call["id"]
-        ))
+    # 如果有反思工具调用，将反思内容加入工具消息中. 反思工具不应该和其他工具并行返回
+    if think_tool_calls:
+        for tool_call in think_tool_calls:
+            reflection_content = tool_call["args"]["reflection"]
+            all_tool_messages.append(ToolMessage(
+                content=f"反思已记录: {reflection_content}",
+                name="think_tool",
+                tool_call_id=tool_call["id"]
+            ))
+        update_payload["supervisor_messages"] = all_tool_messages
+        return Command(
+            goto="supervisor",
+            update=update_payload
+        )
 
-    # 处理ConductResearch调用（研究委派）
     # 这是核心功能：取出所有研究主题
     conduct_research_calls = [
         tool_call for tool_call in most_recent_message.tool_calls
@@ -339,19 +343,17 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
             # 限制并发研究单元数量，防止资源耗尽
             # 这就像控制同时进行的项目数量，避免团队过载
             allowed_conduct_research_calls = conduct_research_calls[:configurable.max_concurrent_research_units]
-            overflow_conduct_research_calls = conduct_research_calls[configurable.max_concurrent_research_units:]
-
             research_tasks = [
-                # FIXME 调用研究子图研究，进入到研究子图
-                researcher_subgraph.ainvoke({
+                #  调用研究子图研究，进入到研究子图
+                researcher_subgraph.ainvoke(input= {  # type: ignore
                     "researcher_messages": [
                         HumanMessage(content=tool_call["args"]["research_topic"])
                     ],
                     "research_topic": tool_call["args"]["research_topic"]
-                }, config)
+                }, config = config)
                 for tool_call in allowed_conduct_research_calls
             ]
-
+            
             tool_results = await asyncio.gather(*research_tasks)
 
             # 得到研究结果消息，会生成一个ToolMessage
@@ -363,17 +365,7 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                     tool_call_id=tool_call["id"]
                 ))
 
-            # 处理溢出的研究调用，返回错误消息
-            # 告知用户超过了并发限制，需要减少研究单元数量 FIXME 这个没必要带给模型吧
-            for overflow_call in overflow_conduct_research_calls:
-                all_tool_messages.append(ToolMessage(
-                    content=f"Error: Did not run this research as you have already exceeded the maximum number of concurrent research units. Please try again with {configurable.max_concurrent_research_units} or fewer research units.",
-                    name="ConductResearch",
-                    tool_call_id=overflow_call["id"]
-                ))
-
-            # 聚合所有研究结果的原始笔记
-            # 这些笔记将用于最终报告生成
+            # 聚合所有研究结果的原始笔记，这些笔记将用于最终报告生成
             raw_notes_concat = "\n".join([
                 "\n".join(observation.get("raw_notes", []))
                 for observation in tool_results
@@ -395,8 +387,7 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                     }
                 )
 
-    # 步骤3：返回命令，包含所有工具结果
-    # 这些工具消息会被传递给supervisor，继续下一轮决策
+    #  步骤3： 这些工具消息会被传递给supervisor，继续下一轮决策
     update_payload["supervisor_messages"] = all_tool_messages
     return Command(
         goto="supervisor",
@@ -436,10 +427,10 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     """
     # 步骤1：加载配置并验证工具可用性
     configurable = Configuration.from_runnable_config(config)
+    # 包含研究主题和研究压缩后的内容
     researcher_messages = state.get("researcher_messages", [])
 
     # 获取所有可用的研究工具（搜索、MCP、think_tool）
-    # 如果没有工具，就无法进行研究，这是致命错误
     tools = await get_all_tools(config)
     if len(tools) == 0:
         raise ValueError(
@@ -448,27 +439,21 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         )
 
     # 步骤2：配置研究人员模型和工具
-    # 准备系统提示，如果可用则包含MCP上下文
-    # MCP（Model Context Protocol）允许集成外部工具和服务
     researcher_prompt = Template(research_system_prompt).substitute(
-        mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str()
     )
+    messages = [SystemMessage(content=researcher_prompt)] + researcher_messages
 
-    # 配置模型，包含工具、重试逻辑和设置
-    # bind_tools将所有可用工具绑定到模型上
+    # 步骤3：生成研究人员响应，包含系统上下文
     research_model = ((
                           ChatOpenAI(model=configurable.research_model,
+                                     # 指研究者最大的token数量
                                      max_tokens=configurable.research_model_max_tokens,
                                      api_key=get_api_key_for_model(configurable.research_model, config),
                                      base_url=get_base_url_for_model(configurable.research_model),
                                      tags=["langsmith:nostream"])
                       ).bind_tools(tools)
                       .with_retry(stop_after_attempt=configurable.max_structured_output_retries))
-
-    # 步骤3：生成研究人员响应，包含系统上下文
-    # 系统消息告诉AI如何行动，人类消息是具体的研究任务
-    messages = [SystemMessage(content=researcher_prompt)] + researcher_messages
     response = await research_model.ainvoke(messages)
 
     # 步骤4：更新状态并继续执行工具
@@ -511,7 +496,6 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     处理多种类型的工具调用：
     1. think_tool - 战略反思，继续研究对话
     2. 搜索工具（tavily_search, web_search） - 信息收集
-    3. MCP工具 - 外部工具集成
     4. ResearchComplete - 表示单个研究任务完成
 
     退出条件：
@@ -535,17 +519,11 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     most_recent_message = researcher_messages[-1]
 
     # 早期退出：如果没有工具调用（包括原生网络搜索）
-    # 这意味着AI已经完成思考，不需要进一步研究
     has_tool_calls = bool(most_recent_message.tool_calls)
-    has_native_search = (
-            openai_websearch_called(most_recent_message) or
-            anthropic_websearch_called(most_recent_message)
-    )
-
-    if not has_tool_calls and not has_native_search:
+    if not has_tool_calls :
         return Command(goto="compress_research")
 
-    # 步骤2：处理其他工具调用（搜索、MCP工具等）
+    # 步骤2：处理其他工具调用（搜）
     # 获取工具映射，通过名称快速查找
     tools = await get_all_tools(config)
     tools_by_name = {
@@ -554,7 +532,6 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     }
 
     # 并行执行所有工具调用
-    # 这提高了效率，特别是当需要多次搜索时
     tool_calls = most_recent_message.tool_calls
     tool_execution_tasks = [
         execute_tool_safely(tools_by_name[tool_call["name"]], tool_call["args"], config)
@@ -562,7 +539,6 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     ]
     observations = await asyncio.gather(*tool_execution_tasks)
 
-    # 从执行结果创建工具消息
     # 这些消息会返回给研究人员，用于下一轮决策
     tool_outputs = [
         ToolMessage(
@@ -620,10 +596,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     Returns:
         包含压缩研究摘要和原始笔记的字典
     """
-    # 步骤1：配置压缩模型
-    # 使用单独的模型进行压缩，通常选择成本较低的模型
+    # 步骤1：配置压缩模型， 使用单独的模型进行压缩，通常选择成本较低的模型
     configurable = Configuration.from_runnable_config(config)
-
     synthesizer_model = ((
         ChatOpenAI(model=configurable.compression_model,
                    max_tokens=configurable.compression_model_max_tokens,
@@ -634,15 +608,10 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
 
     # 步骤2：为压缩准备消息
     researcher_messages = state.get("researcher_messages", [])
-
-    # 添加指令，从研究模式切换到压缩模式
-    # 这告诉AI停止研究，开始总结
     researcher_messages.append(HumanMessage(content=compress_research_simple_human_message))
-
     # 步骤3：尝试压缩，包含token限制的重试逻辑
     synthesis_attempts = 0
     max_attempts = 3
-
     while synthesis_attempts < max_attempts:
         try:
             # 创建专注于压缩任务的系统提示
@@ -653,7 +622,6 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
             response = await synthesizer_model.ainvoke(messages)
 
             # 从所有工具和AI消息中提取原始笔记
-            # 这些是未经过滤的详细信息
             raw_notes_content = "\n".join([
                 str(message.content)
                 for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
@@ -667,7 +635,6 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
 
         except Exception as e:
             synthesis_attempts += 1
-
             # 通过删除旧消息处理token限制超出
             if is_token_limit_exceeded(e, configurable.research_model):
                 researcher_messages = remove_up_to_last_ai_message(researcher_messages)
@@ -730,7 +697,6 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     max_retries = 3
     current_retry = 0
     findings_token_limit = None
-
     while current_retry <= max_retries:
         try:
             # 创建包含所有研究上下文的综合提示
@@ -794,12 +760,13 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
 
 # ------------------------------------- 监督者子图构建 -------------------------------------
 # 创建监督者工作流程，管理研究委派和协调
-supervisor_builder = StateGraph(state_schema=SupervisorState, context_schema=Configuration)
+supervisor_builder = StateGraph(state_schema=SupervisorState, # type: ignore
+                                context_schema=Configuration)
 
 # 添加监督者节点用于研究管理
-supervisor_builder.add_node("supervisor", supervisor)
+supervisor_builder.add_node("supervisor", supervisor) # type: ignore
 # 工具节点
-supervisor_builder.add_node("supervisor_tools", supervisor_tools)
+supervisor_builder.add_node("supervisor_tools", supervisor_tools) # type: ignore
 
 # 定义监督者工作流程边
 supervisor_builder.add_edge(START, "supervisor")  # 监督者入口点
@@ -809,13 +776,14 @@ supervisor_subgraph = supervisor_builder.compile()
 
 # -------------------------------- 研究人员子图构建 --------------------------------
 # 创建单个研究人员工作流程，对特定主题进行深入研究
-researcher_builder = StateGraph(state_schema=ResearcherState, output_schema=ResearcherOutputState,
+researcher_builder = StateGraph(state_schema=ResearcherState, # type: ignore
+                                output_schema=ResearcherOutputState,
                                 context_schema=Configuration)
 
 # 添加研究人员节点用于研究执行和压缩
-researcher_builder.add_node("researcher", researcher)
-researcher_builder.add_node("researcher_tools", researcher_tools)
-researcher_builder.add_node("compress_research", compress_research)
+researcher_builder.add_node("researcher", researcher) # type: ignore
+researcher_builder.add_node("researcher_tools", researcher_tools) # type: ignore
+researcher_builder.add_node("compress_research", compress_research) # type: ignore
 
 # 定义研究人员工作流程边
 researcher_builder.add_edge(START, "researcher")  # 研究人员入口点
@@ -824,24 +792,23 @@ researcher_builder.add_edge("compress_research", END)  # 压缩后退出点
 # 编译研究人员子图供监督者并行执行
 researcher_subgraph = researcher_builder.compile()
 
-# 主深度研究图构建
 # 创建从用户输入到最终报告的完整深度研究工作流程
 deep_researcher_builder = StateGraph(
-    state_schema=AgentState,
-    input_schema=AgentInputState,
+    state_schema=AgentState, # type: ignore
+    input_schema=AgentInputState,  # type: ignore
     context_schema=Configuration
 )
 
 # ---------------------------- 添加主工作流程节点，用于完整的研究过程 ----------------------------
 
 # 用户澄清阶段
-deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)
+deep_researcher_builder.add_node("clarify_with_user", clarify_with_user) # type: ignore
 # 研究计划阶段
-deep_researcher_builder.add_node("write_research_brief", write_research_brief)
+deep_researcher_builder.add_node("write_research_brief", write_research_brief) # type: ignore
 # 研究执行阶段
-deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)
+deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph) # type: ignore
 # 报告生成阶段
-deep_researcher_builder.add_node("final_report_generation", final_report_generation)
+deep_researcher_builder.add_node("final_report_generation", final_report_generation) # type: ignore
 
 # 定义主工作流程边，用于顺序执行
 deep_researcher_builder.add_edge(START, "clarify_with_user")  # 入口点

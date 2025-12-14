@@ -4,6 +4,7 @@ import operator
 from typing import Annotated, Optional
 
 from langchain_core.messages import MessageLikeRepresentation
+from langchain_core.tools import tool
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -23,7 +24,7 @@ class ConductResearch(BaseModel):
         description="要研究的主题。应该是单个主题，并且应该详细描述（至少一段）。",
     )
 
-
+@tool
 class ResearchComplete(BaseModel):
     """调用此工具表示研究完成。"""
 
