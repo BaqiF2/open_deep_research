@@ -5,6 +5,7 @@ import logging
 import os
 import warnings
 from datetime import datetime, timedelta, timezone
+from string import Template
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import aiohttp
@@ -99,7 +100,11 @@ async def tavily_search(
 
     # 步骤 4: 创建总结任务（跳过空内容）
     async def noop():
-        """对于没有原始内容的结果的空操作函数。"""
+        """对于没有原始内容的结果的空操作函数。
+
+        Returns:
+            None: 始终返回 None。
+        """
         return None
 
     summarization_tasks = [
@@ -206,7 +211,7 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
     """
     try:
         # 创建带有当前日期上下文的提示
-        prompt_content = summarize_webpage_prompt.format(
+        prompt_content = Template(summarize_webpage_prompt).substitute(
             webpage_content=webpage_content,
             date=get_today_str()
         )
@@ -435,10 +440,28 @@ def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     original_coroutine = tool.coroutine
 
     async def authentication_wrapper(**kwargs):
-        """具有 MCP 错误处理和用户友好消息的增强协程。"""
+        """具有 MCP 错误处理和用户友好消息的增强协程。
+
+        Args:
+            **kwargs: 传递给原始工具协程的关键字参数。
+
+        Returns:
+            原始工具协程的执行结果。
+
+        Raises:
+            ToolException: 当遇到需要交互的 MCP 错误时抛出。
+            BaseException: 当遇到其他非 MCP 错误时重新抛出。
+        """
 
         def _find_mcp_error_in_exception_chain(exc: BaseException) -> McpError | None:
-            """在异常链中递归搜索 MCP 错误。"""
+            """在异常链中递归搜索 MCP 错误。
+
+            Args:
+                exc: 要检查的异常对象。
+
+            Returns:
+                找到的 McpError 对象，如果未找到则返回 None。
+            """
             if isinstance(exc, McpError):
                 return exc
 
@@ -641,7 +664,14 @@ async def get_all_tools(config: RunnableConfig):
 
 
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
-    """提取工具消息内容"""
+    """提取工具消息内容。
+
+    Args:
+        messages: 消息列表，包含各种类型的消息对象。
+
+    Returns:
+        工具消息内容的字符串列表。
+    """
     return [tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")]
 
 
@@ -748,7 +778,15 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
 
 
 def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
-    """检查异常是否表示 OpenAI 令牌限制被超出。"""
+    """检查异常是否表示 OpenAI 令牌限制被超出。
+
+    Args:
+        exception: 要检查的异常对象。
+        error_str: 异常消息的小写字符串表示。
+
+    Returns:
+        如果异常表示 OpenAI 令牌限制被超出则返回 True，否则返回 False。
+    """
     # 分析异常元数据
     exception_type = str(type(exception))
     class_name = exception.__class__.__name__
@@ -782,7 +820,15 @@ def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
 
 
 def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
-    """检查异常是否表示 Anthropic 令牌限制被超出。"""
+    """检查异常是否表示 Anthropic 令牌限制被超出。
+
+    Args:
+        exception: 要检查的异常对象。
+        error_str: 异常消息的小写字符串表示。
+
+    Returns:
+        如果异常表示 Anthropic 令牌限制被超出则返回 True，否则返回 False。
+    """
     # 分析异常元数据
     exception_type = str(type(exception))
     class_name = exception.__class__.__name__
@@ -806,7 +852,15 @@ def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
 
 
 def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
-    """检查异常是否表示 Google/Gemini 令牌限制被超出。"""
+    """检查异常是否表示 Google/Gemini 令牌限制被超出。
+
+    Args:
+        exception: 要检查的异常对象。
+        error_str: 异常消息的小写字符串表示。
+
+    Returns:
+        如果异常表示 Gemini 令牌限制被超出则返回 True，否则返回 False。
+    """
     # 分析异常元数据
     exception_type = str(type(exception))
     class_name = exception.__class__.__name__
@@ -933,7 +987,14 @@ def get_today_str() -> str:
 
 
 def get_config_value(value):
-    """从配置中提取值，处理枚举和 None 值。"""
+    """从配置中提取值，处理枚举和 None 值。
+
+    Args:
+        value: 要提取的配置值，可以是 None、字符串、字典或枚举。
+
+    Returns:
+        提取后的值。如果是枚举则返回其 value 属性，否则直接返回。
+    """
     if value is None:
         return None
     if isinstance(value, str):
@@ -945,7 +1006,15 @@ def get_config_value(value):
 
 
 def get_api_key_for_model(model_name: str, config: RunnableConfig):
-    """从环境或配置中获取特定模型的 API 密钥。"""
+    """从环境或配置中获取特定模型的 API 密钥。
+
+    Args:
+        model_name: 模型名称，用于确定使用哪个 API 密钥。
+        config: 运行时配置，可能包含 API 密钥信息。
+
+    Returns:
+        对应模型的 API 密钥字符串，如果未找到则返回 None。
+    """
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
     model_name = model_name.lower()
     # 这个基本不使用
@@ -970,7 +1039,14 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
 
 
 def get_base_url_for_model(model_name: str):
-    """从环境或配置中获取特定模型的 URL。"""
+    """从环境或配置中获取特定模型的 URL。
+
+    Args:
+        model_name: 模型名称，用于确定是否需要自定义 base URL。
+
+    Returns:
+        模型的 base URL 字符串，如果使用默认 URL 则返回 None。
+    """
     model_name = model_name.lower()
     if model_name.startswith("openai:") or model_name.startswith("anthropic:") or model_name.startswith("google"):
         return None
@@ -979,7 +1055,14 @@ def get_base_url_for_model(model_name: str):
 
 
 def get_tavily_api_key(config: RunnableConfig):
-    """从环境或配置中获取 Tavily API 密钥。"""
+    """从环境或配置中获取 Tavily API 密钥。
+
+    Args:
+        config: 运行时配置，可能包含 API 密钥信息。
+
+    Returns:
+        Tavily API 密钥字符串，如果未找到则返回 None。
+    """
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
     if should_get_from_config.lower() == "true":
         api_keys = config.get("configurable", {}).get("apiKeys", {})

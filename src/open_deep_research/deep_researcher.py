@@ -5,9 +5,9 @@
 """
 
 import asyncio
+from string import Template
 from typing import Literal
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -24,7 +24,7 @@ from langgraph.types import Command
 from open_deep_research.configuration import (
     Configuration,
 )
-from open_deep_research.prompts import (
+from open_deep_research.prompts_zh import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
     compress_research_system_prompt,
@@ -85,18 +85,11 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     """
     # 步骤1：检查配置中是否启用了澄清功能
     configurable = Configuration.from_runnable_config(config)
-    # 默认的配置是TRUE
     if not configurable.allow_clarification:
         # 跳过澄清步骤，直接进入研究。这是快速通道，适合明确的研究请求
         return Command(goto="write_research_brief")
 
     # 步骤2：为结构化澄清分析准备模型
-    # 这里使用了结构化输出（with_structured_output），确保AI返回的数据符合ClarifyWithUser格式
-    messages = state["messages"]
-
-    # 配置模型，包含结构化输出和重试逻辑
-    # .with_structured_output()让AI返回JSON格式的结构化数据
-    # .with_retry()在API调用失败时自动重试
     clarification_model = ((
                                ChatOpenAI(model=configurable.research_model,
                                           max_tokens=configurable.research_model_max_tokens,
@@ -106,16 +99,15 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
                            ).with_structured_output(ClarifyWithUser)
                            .with_retry(stop_after_attempt=configurable.max_structured_output_retries))
 
-    # 步骤3：分析是否需要澄清
-    # 使用预定义的提示模板分析用户消息是否需要澄清
-    prompt_content = clarify_with_user_instructions.format(
+    # 步骤3： 使用预定义的提示模板分析用户消息是否需要澄清
+    messages = state["messages"]
+    prompt_content = Template(clarify_with_user_instructions).substitute(
         messages=get_buffer_string(messages),
         date=get_today_str()
     )
     response = await clarification_model.ainvoke([HumanMessage(content=prompt_content)])
 
     # 步骤4：根据澄清分析进行路由
-    # FIXME 这个阶段主要更新的状态数据是messages，包含用户消息和AI的问答和最终的研究论点
     if response.need_clarification:
         # 以澄清问题结束，返回给用户。在LangGraph中，END表示流程结束
         return Command(
@@ -155,7 +147,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
                 - research_brief: 结构化的研究计划
                 - supervisor_messages: 监督者的初始对话（系统提示+研究简报）
     """
-    # 步骤1：为结构化输出设置研究模型
+    # 步骤1：配置简报生成模型
     configurable = Configuration.from_runnable_config(config)
     research_model = ((
                           ChatOpenAI(model=configurable.research_model,
@@ -166,24 +158,21 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
                       ).with_structured_output(ResearchQuestion)
                       .with_retry(stop_after_attempt=configurable.max_structured_output_retries))
 
-    # 步骤2：从用户消息生成结构化研究简报
-    # 使用提示模板将用户消息转换为研究简报
-    prompt_content = transform_messages_into_research_topic_prompt.format(
+    #  步骤2：使用提示模板将用户消息转换为研究简报
+    prompt_content = Template(transform_messages_into_research_topic_prompt).substitute(
         messages=get_buffer_string(state.get("messages", [])),
         date=get_today_str()
     )
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
 
-    # 步骤3：使用研究简报和指令初始化监督者
-    # 监督者需要知道：当前日期、并发研究单元限制、迭代次数限制等
-    supervisor_system_prompt = lead_researcher_prompt.format(
+    # 步骤3： 监督者需要知道：当前日期、并发研究单元限制、迭代次数限制等
+    supervisor_system_prompt = Template(lead_researcher_prompt).substitute(
         date=get_today_str(),
         max_concurrent_research_units=configurable.max_concurrent_research_units,
         max_researcher_iterations=configurable.max_researcher_iterations
     )
 
-    # 1. 进入监督者阶段时，将研究简报作为初始消息
-    # 2. 更新AgentState数据，保存研究简报和监督者消息列表
+    # 进入监督者阶段时，将研究简报作为初始消息.更新AgentState数据，保存研究简报和监督者消息列表
     return Command(
         goto="research_supervisor",
         update={
@@ -461,7 +450,7 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     # 步骤2：配置研究人员模型和工具
     # 准备系统提示，如果可用则包含MCP上下文
     # MCP（Model Context Protocol）允许集成外部工具和服务
-    researcher_prompt = research_system_prompt.format(
+    researcher_prompt = Template(research_system_prompt).substitute(
         mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str()
     )
@@ -657,7 +646,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     while synthesis_attempts < max_attempts:
         try:
             # 创建专注于压缩任务的系统提示
-            compression_prompt = compress_research_system_prompt.format(date=get_today_str())
+            compression_prompt = Template(compress_research_system_prompt).substitute(date=get_today_str())
             messages = [SystemMessage(content=compression_prompt)] + researcher_messages
 
             # 执行压缩
@@ -745,7 +734,7 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     while current_retry <= max_retries:
         try:
             # 创建包含所有研究上下文的综合提示
-            final_report_prompt = final_report_generation_prompt.format(
+            final_report_prompt = Template(final_report_generation_prompt).substitute(
                 research_brief=state.get("research_brief", ""),
                 messages=get_buffer_string(state.get("messages", [])),
                 findings=findings,
